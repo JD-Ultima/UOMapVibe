@@ -18,6 +18,7 @@ Thumbs.db
 *.mul
 *.uop
 *.idx
+Map Files/
 
 # Generated tiles (regenerate with TileExporter)
 web/tiles/
