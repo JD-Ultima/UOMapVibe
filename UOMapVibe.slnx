@@ -1,0 +1,10 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/UOMapVibe.Api/UOMapVibe.Api.csproj" />
+    <Project Path="src/UOMapVibe.Core/UOMapVibe.Core.csproj" />
+    <Project Path="src/UOMapVibe.TileExporter/UOMapVibe.TileExporter.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/UOMapVibe.Core.Tests/UOMapVibe.Core.Tests.csproj" />
+  </Folder>
+</Solution>
