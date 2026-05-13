@@ -1,52 +1,90 @@
 # UOMapVibe
 
-AI-assisted map editing for Ultima Online. Draw what you want on a web map, and AI builds it using the same materials as nearby structures — automatically.
+**AI-assisted map editing for Ultima Online.** Draw what you want on a web map, and an AI builds it using the same materials as the buildings already around your target area — no item-ID hunting, no CentrED# round-trips.
+
+The AI never guesses item IDs. The system reads your MUL files, classifies every nearby static by `TileFlag`, detects wall orientations from placement patterns, measures building footprints, and hands the AI an exact material palette to work with.
+
+---
 
 ## What It Does
 
-1. You open a web map of your UO world
-2. You draw shapes where you want changes (rectangles, lines, markers)
-3. You type what you want ("build a shop here", "extend the road east")
-4. The system analyzes nearby buildings and detects their materials automatically
-5. You copy the data to an AI (like Claude), which generates the exact edit commands
-6. Commands execute directly against your MUL files — no CentrED# needed
+1. You open a web map of your UO world in a browser
+2. You draw shapes where you want changes — rectangles, polylines, markers, circles
+3. You type plain-English labels ("build a shop here", "extend the road east")
+4. **Prepare**: the server analyzes a 40-tile radius around your annotation and auto-detects local materials, wall directions, footprint sizes, road styles
+5. **Copy for AI**: enriched JSON (annotations + style palette + terrain Z + existing statics + AI instructions) is copied to your clipboard *and* saved as a download
+6. You paste into Claude (or any AI); it returns a JSON command list using the detected materials
+7. **Execute**: commands are written directly to your `statics0.mul` / `staidx0.mul` files with automatic snapshots for one-click rollback
 
-The AI never guesses item IDs. It uses the same walls, floors, roofs, and doors as the buildings already around your target area.
+---
+
+## Features
+
+### Map viewer
+- Leaflet-based web app with full UO tile pyramid (zoom 0–5)
+- Live mouse coordinates in UO world space (X/Y) shown in the status bar
+- Default view drops you at Britain Bank (1438, 1690)
+- Supports all six UO facets: Felucca, Trammel, Ilshenar, Malas, Tokuno, Ter Mur
+
+### Annotation tools (Leaflet.Draw)
+- **Rectangle** — area selection (best for buildings)
+- **Polyline** — paths (best for roads or walls)
+- **Marker** — single point (best for placing one item)
+- **Circle** — circular area selection
+- Each shape gets an inline text-label popup describing intent
+- Edit or delete annotations via the Leaflet.Draw toolbar
+
+### Automatic style inference
+- **Wall classification**: items with `TileFlag.Wall` (or impassable + height > 0)
+- **Wall orientation detection**: X-variance vs Y-variance of placements maps walls to N/S/E/W facings + corner pieces
+- **Floor / Roof / Door / Window / Stairs / Light source / Foliage / Bridge / Decoration / Road** detection — driven by `TileFlag` values from `tiledata.mul`
+- **Building metrics**: average footprint width/depth, wall height, floor Z offset, roof Z offset, multi-story detection
+- **Road detection**: groups ground-level Surface items, identifies linear patterns
+- AI instructions are embedded in the prepare payload — Claude gets a self-explanatory brief
+
+### Map editing
+- POST `/api/execute` with a list of `place` / `delete` commands
+- Automatic snapshot of every affected 8×8 block before each batch
+- Placed statics appear as green dot markers on the web map with hex-ID + Z tooltips
+- One-click rollback to any prior snapshot
+
+### Item catalog search
+- Sidebar search box queries `tiledata.mul` by name
+- Returns item ID (hex), name, height, flags — useful as a fallback when style inference misses something
+
+### Tile exporter
+- Standalone CLI that reads `map*.mul`, `statics*.mul`, `staidx*.mul`, `tiledata.mul`, `radarcol.mul`
+- Builds a top-down radar image (highest-Z static or terrain wins per cell)
+- Writes a Leaflet tile pyramid as 24-bit BMP files (`tiles/{z}/{x}/{y}.bmp`) — zero image-library dependencies
+- Generates `web/data/tile_catalog.json` with every named item from `tiledata.mul`
+- Falls back to flag-derived colors if `radarcol.mul` is absent
 
 ---
 
 ## Prerequisites
 
-Before you start, make sure you have:
-
 1. **Windows PC** (tested on Windows 11)
-2. **.NET 8 SDK** — download from [dotnet.microsoft.com/download](https://dotnet.microsoft.com/download)
-   - After installing, open a terminal and type `dotnet --version` to confirm it works
-3. **UO MUL files** — you need these files from your UO installation:
-   - `map0.mul` (terrain data)
-   - `statics0.mul` (objects/items on the map)
-   - `staidx0.mul` (index for statics)
-   - `tiledata.mul` (item names and properties)
-   - `radarcol.mul` (optional — colors for the map view)
-
-> **Important:** Make a backup copy of your MUL files before editing. This tool writes directly to MUL files.
+2. **.NET 8 SDK** — [dotnet.microsoft.com/download](https://dotnet.microsoft.com/download). Verify with `dotnet --version`.
+3. **UO MUL files** from your installation:
+   - `map0.mul` (terrain)
+   - `statics0.mul` (objects)
+   - `staidx0.mul` (statics index)
+   - `tiledata.mul` (item metadata)
+   - `radarcol.mul` (optional — color palette; falls back to flag-based colors)
+4. **A backup of your MUL files.** This tool writes directly to them.
 
 ---
 
-## Setup (One-Time)
+## Setup (one-time)
 
-### Step 1: Get the Code
-
-Download or clone this repository to your computer:
+### 1. Clone the repo
 
 ```
-git clone https://github.com/YOUR_USERNAME/UOMapVibe.git
+git clone https://github.com/JD-Ultima/UOMapVibe.git
 cd UOMapVibe
 ```
 
-### Step 2: Copy Your MUL Files
-
-Create a folder called `Map Files` inside the UOMapVibe directory and copy your MUL files into it:
+### 2. Copy your MUL files into the project
 
 ```
 UOMapVibe/
@@ -58,91 +96,104 @@ UOMapVibe/
     radarcol.mul     (optional)
 ```
 
-### Step 3: Configure the Data Path
+### 3. Configure the data path
 
-Open `src/UOMapVibe.Api/appsettings.json` and set `MulDirectory` to the full path of your `Map Files` folder:
+Edit `src/UOMapVibe.Api/appsettings.json` and set absolute paths to your MUL directory and a snapshot directory:
 
 ```json
 {
   "UOData": {
     "MulDirectory": "C:\\path\\to\\UOMapVibe\\Map Files",
-    "SnapshotDirectory": "snapshots",
-    "DefaultMapId": "0"
+    "SnapshotDirectory": "C:\\path\\to\\UOMapVibe\\snapshots",
+    "DefaultMapId": 0
   }
 }
 ```
 
-Use double backslashes (`\\`) in the path on Windows.
+Use double-backslashes (`\\`) in JSON paths on Windows. `DefaultMapId` selects the facet (0 = Felucca, 1 = Trammel, 2 = Ilshenar, 3 = Malas, 4 = Tokuno, 5 = Ter Mur).
 
-### Step 4: Generate Map Tiles
+### 4. Generate map tiles + catalog
 
-This creates the visual map images for the web viewer:
+The TileExporter is a CLI tool with required arguments:
 
 ```
-dotnet run --project src/UOMapVibe.TileExporter
+dotnet run --project src/UOMapVibe.TileExporter -- --data "C:\path\to\Map Files" --out web --map 0 --maxzoom 5
 ```
 
-This takes a few minutes. When done, you'll see a `web/tiles/` folder with map images and a `web/data/tile_catalog.json` file.
+Arguments:
+- `--data` — path to your MUL directory (required)
+- `--out`  — output directory; `web` writes tiles into `web/tiles/` and the catalog into `web/data/` (required)
+- `--map`  — facet ID, default `0` (Felucca)
+- `--maxzoom` — pyramid depth, default `5` (1 pixel per UO tile at max zoom)
 
-### Step 5: Start the Server
+Generates `web/tiles/{z}/{x}/{y}.bmp` and `web/data/tile_catalog.json`. Takes a few minutes for a full Felucca export.
+
+### 5. Start the API server
 
 ```
 dotnet run --project src/UOMapVibe.Api
 ```
 
-The server starts at `http://localhost:5000`. Open that URL in your web browser.
+Listens on `http://localhost:5000` and serves the web app from `web/` at the same origin. Open `http://localhost:5000` in your browser.
 
 ---
 
 ## How to Use
 
-### Drawing Annotations
+### Drawing annotations
 
-1. Open `http://localhost:5000` in your browser
-2. Navigate the map to find the area you want to edit
-3. Use the drawing tools on the left side of the map:
-   - **Rectangle** — select an area (best for buildings)
-   - **Polyline** — draw a path (best for roads or walls)
-   - **Marker** — mark a single point (best for placing one item)
-   - **Circle** — select a circular area
-4. After drawing, type a label describing what you want (e.g., "build a tavern here")
+1. Navigate the map to your target area (mouse coordinates display in the bottom-right)
+2. Pick a shape from the Leaflet.Draw toolbar (top-left of the map)
+3. Draw your shape
+4. Type a plain-English label in the popup — e.g. "build a tavern here"
+5. Repeat for multiple intents in one batch; everything is included in the next Prepare call
 
-### Preparing Data for AI
+### Preparing data for the AI
 
-1. Click **Prepare for AI** — this queries the map data around your annotations
-   - The system reads all existing items in your target area
-   - It analyzes a 40-tile radius to detect the local building style
-   - You'll see the detected materials in the Style Preview panel
-2. Review the detected materials — do they look right? (stone walls, wooden floors, etc.)
-3. Click **Copy for AI** — this copies the enriched data to your clipboard
+1. Click **Prepare for AI** in the sidebar
+2. The server computes the combined bounding box of all your annotations, then calls `/api/prepare` with a 40-tile context radius
+3. The **Style Preview** panel updates with:
+   - Walls grouped by detected orientation (S/N facing, E/W facing, corners, other)
+   - Floors, roofs, doors, windows, stairs, lights, decorations, road materials — top items by frequency
+   - Building metrics: avg footprint, wall height, floor/roof Z offsets, multi-story flag, building count
+4. Review the palette. If it looks wrong, draw your annotation closer to the style you actually want to match.
 
 ### Sending to AI
 
-1. Open Claude (or another AI assistant)
-2. Paste the copied data
-3. The AI will generate a JSON command list using the detected materials
-4. Copy the AI's command output
+1. Click **Copy for AI** — JSON is copied to your clipboard *and* downloaded as `uomapvibe_payload_<timestamp>.json`
+2. Paste into Claude (or your AI of choice)
+3. Ask the AI to generate a `place` / `delete` command list using the supplied material palette
+4. Copy the AI's response
 
-### Executing Commands
+### Executing commands
 
-1. Paste the AI's command JSON into the **Execute Commands** text box
-2. Click **Execute** — the commands are applied to your MUL files
-3. Green dots appear on the map showing where items were placed
+1. Paste the AI's command JSON into the **Execute Commands** textarea
+2. Click **Run Commands**
+3. Green dots appear on the map at every placed location (hover for `0xITEMID Z=N` tooltip)
+4. Snapshot list refreshes automatically with the new batch ID
 
-### Verifying In-Game
+Command format:
+```json
+[
+  { "op": "place",  "itemId": 1, "x": 1440, "y": 1700, "z": 0, "hue": 0 },
+  { "op": "delete", "itemId": 3274, "x": 1445, "y": 1705, "z": 12 }
+]
+```
 
-1. Stop your UO server (if running)
-2. Copy the edited MUL files back to your UO server's data folder
-3. Restart the server and game client
-4. Walk to the edited area to see the changes
+### Verifying in-game
 
-### Rolling Back
+1. Stop your ModernUO (or other UO) server — it holds MUL files open while running
+2. Copy the edited MUL files back to your server's data folder (or have the server read directly from `Map Files/` if it's the same directory)
+3. Restart the server and game client (the client reads MUL files on startup)
+4. Walk to the edited area
 
-Every edit creates an automatic snapshot. If something looks wrong:
+### Rolling back
 
-1. Click **Load Snapshots** in the Snapshots section
-2. Find the batch you want to undo
-3. Click **Rollback** next to it
+Every `execute` call snapshots affected 8×8 blocks first.
+
+1. Find the batch ID in the **Snapshots** section (most recent on top, up to 20 shown)
+2. Click **Rollback**
+3. The snapshot is restored and the snapshot list refreshes
 
 ---
 
@@ -151,55 +202,84 @@ Every edit creates an automatic snapshot. If something looks wrong:
 ```
 UOMapVibe/
 ├── src/
-│   ├── UOMapVibe.Core/          # MUL file reading/writing + style analysis
-│   ├── UOMapVibe.Api/           # Web server (API + serves the web app)
-│   └── UOMapVibe.TileExporter/  # Generates map tile images
-├── web/                         # Web app (HTML/CSS/JS)
-├── tests/                       # Automated tests
-└── Map Files/                   # Your MUL files go here (not in git)
+│   ├── UOMapVibe.Core/                  # MUL read/write + style analysis
+│   │   ├── MulFiles/                    # MapReader, StaticsReader/Writer, TileDataReader, RadarColorReader
+│   │   ├── Models/                      # LandTile, StaticTile, TileInfo, MapDimensions (all 6 facets)
+│   │   ├── Operations/                  # RegionQuery, BatchExecutor
+│   │   ├── Analysis/                    # StaticClassifier, OrientationDetector, BuildingMetrics, RoadDetector, StyleAnalyzer
+│   │   └── Rollback/                    # SnapshotManager
+│   ├── UOMapVibe.Api/                   # ASP.NET Minimal API + static-file server for web/
+│   └── UOMapVibe.TileExporter/          # CLI: tile pyramid + item catalog
+├── web/                                 # Leaflet app (HTML/CSS/JS)
+│   ├── index.html
+│   ├── css/style.css
+│   └── js/
+│       ├── app.js                       # Leaflet setup, UO ↔ latLng coordinate conversion
+│       ├── annotationTools.js           # Leaflet.Draw shapes + label popups
+│       ├── stylePreview.js              # Renders detected material palette
+│       ├── enrichment.js                # "Prepare" — calls /api/prepare
+│       ├── export.js                    # "Copy for AI" — clipboard + JSON download
+│       ├── executor.js                  # "Run Commands" — POST /api/execute, snapshot list, rollback
+│       └── tileBrowser.js               # Item catalog search (debounced)
+├── tests/UOMapVibe.Core.Tests/          # xUnit tests
+└── Map Files/                           # Your MUL files (not in git)
 ```
 
-## API Endpoints
+## API Reference
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
-| `/api/region` | GET | Query statics + terrain in a bounding box |
-| `/api/style` | GET | Analyze building style in a region |
-| `/api/prepare` | GET | Combined region data + style analysis for AI |
-| `/api/execute` | POST | Execute place/delete commands |
-| `/api/rollback/{batchId}` | POST | Undo a batch of edits |
-| `/api/snapshots` | GET | List available snapshots |
-| `/api/catalog/search` | GET | Search item catalog by name |
+| `/api/region?mapId=&x1=&y1=&x2=&y2=` | GET | Statics + terrain in a bounding box |
+| `/api/style?mapId=&x1=&y1=&x2=&y2=` | GET | Style analysis (material palette + building metrics) |
+| `/api/prepare?mapId=&targetX1=&targetY1=&targetX2=&targetY2=&contextRadius=40` | GET | Combined: target region data + style analysis from wider context + terrain Z grid + Z-level summary + AI instructions |
+| `/api/execute` | POST | Body: `{ mapId?, commands: [{op, itemId, x, y, z, hue}] }` — auto-snapshots, returns `{ batchId, placed, deleted, errors }` |
+| `/api/rollback/{batchId}` | POST | Restore the snapshot from before that batch |
+| `/api/snapshots` | GET | List available snapshot batch IDs |
+| `/api/catalog/search?q=` | GET | Search `tiledata.mul` items by name (max 50) |
+
+`mapId` defaults to `appsettings.json` → `UOData.DefaultMapId`.
 
 ## Building from Source
 
-```bash
-# Build everything
-dotnet build UOMapVibe.slnx
-
-# Run tests
-dotnet test UOMapVibe.slnx
-
-# Run the tile exporter
-dotnet run --project src/UOMapVibe.TileExporter
-
-# Run the API server
-dotnet run --project src/UOMapVibe.Api
 ```
+dotnet build UOMapVibe.slnx          # build everything
+dotnet test UOMapVibe.slnx           # run tests
+dotnet run --project src/UOMapVibe.Api                # API server
+dotnet run --project src/UOMapVibe.TileExporter -- --data "..." --out web   # tiles
+```
+
+## Multiple Facets
+
+Each facet has its own MUL set. To use Trammel (map 1), for example:
+
+1. Place `map1.mul`, `statics1.mul`, `staidx1.mul` alongside the Felucca files in `Map Files/`
+2. Run TileExporter with `--map 1 --out web-trammel` (or use a different `--out` per facet)
+3. Set `DefaultMapId: 1` in `appsettings.json`, or pass `?mapId=1` on API calls
+
+Facet dimensions are hard-coded in [MapDimensions.cs](src/UOMapVibe.Core/Models/MapDimensions.cs).
 
 ## Troubleshooting
 
-**"MulDirectory not configured"**
-→ Check that `appsettings.json` has the correct path to your Map Files folder.
+**`MulDirectory not configured`**
+→ `appsettings.json` is missing the `UOData.MulDirectory` setting or pointing at the wrong folder.
 
-**No map tiles showing in browser**
-→ Run the TileExporter first (`dotnet run --project src/UOMapVibe.TileExporter`).
+**No map tiles in the browser (blank gray)**
+→ Run TileExporter first. Confirm `web/tiles/0/0/0.bmp` exists.
+
+**TileExporter says "Usage: ..." and exits**
+→ Pass both `--data` and `--out`. Example: `dotnet run --project src/UOMapVibe.TileExporter -- --data "C:\path\Map Files" --out web`
+
+**Coordinates in the status bar but no green dots after Execute**
+→ Open browser DevTools → Console. The API logs errors there. Common causes: server can't write to `Map Files/` (permission/lock), or `op` value is something other than `"place"` / `"delete"`.
+
+**`File is locked` errors when executing**
+→ Your UO server is running and holding `statics0.mul` open. Stop it before editing.
 
 **Changes not visible in-game**
-→ Make sure you restart both the UO server and game client after editing MUL files. The game reads MUL files on startup.
+→ Restart both the UO server *and* the game client. The client caches MUL data on startup.
 
-**"File is locked" errors**
-→ Stop your UO server before editing. The server holds MUL files open while running.
+**Style preview is empty or sparse**
+→ Your annotation is in a region with no nearby static structures (open wilderness, water). Draw closer to existing buildings, or increase `contextRadius` in [enrichment.js](web/js/enrichment.js).
 
 ---
 
